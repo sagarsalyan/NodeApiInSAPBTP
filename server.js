@@ -118,9 +118,122 @@ app.post("/extract-pdf-zip", upload.single("zipfile"), (req, res) => {
     }
 });
 
+//Cleanup ui5 
+app.post("/cleanup-js-zip", upload.single("zipfile"), (req, res) => {
+    if (!req.file) {
+        return res.status(400).json({ message: "No zip file uploaded" });
+    }
 
+    try {
+        const AdmZip = require("adm-zip");
 
+        // Load uploaded ZIP
+        const uploadedZip = new AdmZip(req.file.buffer);
+        const entries = uploadedZip.getEntries();
 
+        // Output ZIP
+        const outputZip = new AdmZip();
+
+        // Group JS files by base name (after removing "-dbg")
+        const jsGroups = {};
+
+        entries.forEach((entry) => {
+            if (entry.isDirectory) return;
+
+            const name = entry.entryName;
+
+            if (name.toLowerCase().endsWith(".js")) {
+                const normalized = name.replace("-dbg", "");
+
+                if (!jsGroups[normalized]) {
+                    jsGroups[normalized] = [];
+                }
+
+                jsGroups[normalized].push(entry);
+            } else {
+                // Add non-JS files as-is
+                outputZip.addFile(entry.entryName, entry.getData());
+            }
+        });
+
+        // Process JS groups
+        Object.keys(jsGroups).forEach((normalizedName) => {
+            const group = jsGroups[normalizedName];
+
+            if (group.length === 1) {
+                const file = group[0];
+                const finalName = file.entryName.replace("-dbg", "");
+                outputZip.addFile(finalName, file.getData());
+            } else {
+                const dbgFile = group.find(f => f.entryName.includes("-dbg"));
+
+                if (dbgFile) {
+                    const finalName = normalizedName;
+                    outputZip.addFile(finalName, dbgFile.getData());
+                }
+            }
+        });
+
+        // -----------------------------------------
+        // ADD ROOT TEMPLATE FILES TO OUTPUT ZIP
+        // -----------------------------------------
+
+        outputZip.addFile(
+            "mta.yaml",
+            Buffer.from(
+                "ID: sample-mta\n_schema-version: 3.1\nversion: 1.0.0\n",
+                "utf-8"
+            )
+        );
+
+        outputZip.addFile(
+            "xs-app.json",
+            Buffer.from(
+                JSON.stringify(
+                    {
+                        welcomeFile: "index.html",
+                        routes: []
+                    },
+                    null,
+                    2
+                ),
+                "utf-8"
+            )
+        );
+
+        outputZip.addFile(
+            "xs-security.json",
+            Buffer.from(
+                JSON.stringify(
+                    {
+                        xsappname: "sample-security",
+                        "tenant-mode": "shared"
+                    },
+                    null,
+                    2
+                ),
+                "utf-8"
+            )
+        );
+
+        // -----------------------------------------
+
+        const resultBuffer = outputZip.toBuffer();
+
+        res.setHeader("Content-Type", "application/zip");
+        res.setHeader(
+            "Content-Disposition",
+            'attachment; filename="cleaned-js.zip"'
+        );
+        res.setHeader("Content-Length", resultBuffer.length);
+
+        res.send(resultBuffer);
+
+    } catch (error) {
+        console.error("ZIP cleanup error:", error);
+        res.status(500).json({ message: "Error cleaning ZIP" });
+    }
+});
 
 
 app.listen(port, () => {
